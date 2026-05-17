@@ -15,16 +15,25 @@ def detect(text: str, filename: str) -> bool:
 
 
 def parse(text: str, filename: str) -> InvoiceRow:
-    is_receipt = filename.lower().startswith("receipt_")
+    is_receipt = "receipt" in filename.lower() or "Receipt" in text.split("\n", 1)[0]
 
-    inv_num = ""
+    # Note: Anthropic PDFs use NULL bytes (\x00) as in-line separators in some
+    # fields, so match non-newline chars and normalize all separators to "-".
+    def _normalize(s: str) -> str:
+        return re.sub(r"[\s\x00]+", "-", s.strip())
+
     if is_receipt:
-        m = re.match(r"receipt_([0-9a-f]{8})", filename)
-        inv_num = m.group(1) if m else ""
+        # "Receipt number 2005 8959 6955" -> 2005-8959-6955; legacy filename: receipt_<hex>
+        m = re.search(r"Receipt number\s+([\d\s\x00]+\d)", text) \
+            or re.match(r"receipt_([0-9a-f]{8})", filename) \
+            or re.search(r"Receipt-([\d-]+)", filename)
+        inv_num = _normalize(m.group(1)) if m else ""
         description = "Anthropic API payment receipt"
     else:
-        m = re.search(r"Invoice(\d+)", filename)
-        inv_num = m.group(1) if m else ""
+        # "Invoice number PIO6ZSCK\x000017" -> PIO6ZSCK-0017; legacy: InvoiceNNNNN
+        m = re.search(r"Invoice number\s+([^\n]+?)\s*$", text, re.M) \
+            or re.search(r"Invoice(\d+)", filename)
+        inv_num = _normalize(m.group(1)) if m else ""
         description = "Anthropic API usage"
 
     date = re.search(r"(?:Date(?: of issue| paid)?|Issued)\s*[:\-]?\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", text)
